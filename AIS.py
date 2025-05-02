@@ -1,60 +1,65 @@
-# AIS-Based Spam Detection (with Oversampling, using local synthetic dataset)
-
-# Step 1: Install and import libraries
-# (Run this in your terminal/Notebook once; remove the '!' if running as a script)
-
-
 import numpy as np
 import pandas as pd
-
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.metrics import (
-    confusion_matrix, accuracy_score,
-    precision_score, recall_score, f1_score, classification_report
-)
-
+from sklearn.metrics import confusion_matrix
 from imblearn.over_sampling import RandomOverSampler
 from aisp.nsa import RNSA
+from tqdm import tqdm
 
-# Step 2: Load and inspect YOUR local synthetic dataset
+# Load dataset
 df = pd.read_csv('spam_ham_dataset.csv')
-# It already has columns ['label','message'], where label is 'spam' or 'ham'
 df['label_num'] = df['label'].map({'ham': 0, 'spam': 1})
 
-print("Total messages:", len(df))
-print(df['label'].value_counts(), "\n")
-
-# Step 3: Vectorize the text data
+# Vectorize messages
 vectorizer = CountVectorizer()
 X = vectorizer.fit_transform(df['message']).toarray()
 y = df['label_num'].values
 
-# Step 4: Split the data
+# Split data
 train_x, test_x, train_y, test_y = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-print("Training set label counts:\n", pd.Series(train_y).value_counts())
-print("Test set label counts:\n", pd.Series(test_y).value_counts(), "\n")
-
-# Step 5: Oversample the minority class in training set
+# Oversample
 ros = RandomOverSampler(random_state=42)
 train_x_resampled, train_y_resampled = ros.fit_resample(train_x, train_y)
 
-print("Resampled training set label counts:\n", pd.Series(train_y_resampled).value_counts(), "\n")
+# Prepare parameter grid
+detector_range = range(100, 10001, 100)
+#radius_range = np.round(np.arange(0.05, 0.250, 0.05), 2)
 
-# Step 6: Train the AIS Model (RNSA)
-rnsa = RNSA(num_detectors=500, radius=0.2, verbose=True)
-rnsa.fit(train_x_resampled, train_y_resampled)
+# Store results
+results = []
 
-# Step 7: Make predictions
-pred_y = rnsa.predict(test_x)
+# Grid search
+for num_detectors in tqdm(detector_range, desc="Detector Loop"):
+    
+        rnsa = RNSA(N=num_detectors, r=0.25, seed=25, verbose=False)
+        rnsa.fit(train_x_resampled, train_y_resampled)
+        pred_y = rnsa.predict(test_x)
+        cm = confusion_matrix(test_y, pred_y)
+        
+        tn, fp = cm[0]
+        fn, tp = cm[1]
 
-# Step 8: Evaluate the model
-print("Confusion Matrix:\n", confusion_matrix(test_y, pred_y))
-print("\nClassification Report:\n", classification_report(test_y, pred_y))
-print("Accuracy: ", accuracy_score(test_y, pred_y))
-print("Precision:", precision_score(test_y, pred_y, zero_division=0))
-print("Recall:   ", recall_score(test_y, pred_y, zero_division=0))
-print("F1 Score: ", f1_score(test_y, pred_y, zero_division=0))
+        ham_accuracy = tn / (tn + fp) if (tn + fp) > 0 else 0
+        spam_accuracy = tp / (tp + fn) if (tp + fn) > 0 else 0
+
+        results.append({
+            'num_detectors': num_detectors,
+            'radius': 0.25,
+            'TN': tn,
+            'FP': fp,
+            'FN': fn,
+            'TP': tp,
+            'ham_accuracy': round(ham_accuracy, 4),
+            'spam_accuracy': round(spam_accuracy, 4)
+        })
+
+# Output results
+results_df = pd.DataFrame(results)
+results_df.to_csv("ais_grid_search_results8.csv", index=False)
+
+# Show sample of results
+import ace_tools as tools; tools.display_dataframe_to_user(name="AIS Grid Search Results", dataframe=results_df)
